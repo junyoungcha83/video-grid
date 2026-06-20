@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>비디오 그리드</title>
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="theme-color" content="#0b0f14" />
+<link rel="icon" type="image/svg+xml" href="icon.svg" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<meta name="apple-mobile-web-app-title" content="비디오그리드" />
+<link rel="apple-touch-icon" href="icon.svg" />
+</head>
+<body>
+
+<header class="topbar" id="topbar">
+  <strong class="brand">🎞️ 비디오 그리드</strong>
+  <button id="btnFolder" class="btn">📂 폴더 열기</button>
+  <label class="btn" title="동영상 여러 개 선택(모바일 권장)">📄 파일 선택
+    <input id="filePick" type="file" accept="video/*" multiple hidden />
+  </label>
+  <input id="dirPick" type="file" accept="video/*" multiple webkitdirectory hidden />
+  <span class="sep"></span>
+  <span class="lbl">배열</span>
+  <div class="seg" id="layoutSeg">
+    <button data-layout="1x2">1×2</button>
+    <button data-layout="2x2">2×2</button>
+    <button data-layout="3x2" class="on">3×2</button>
+    <button data-layout="3x3">3×3</button>
+  </div>
+  <span class="sep"></span>
+  <button id="btnPlayAll" class="btn">▶︎ 전체재생</button>
+  <button id="btnPauseAll" class="btn">⏸︎ 전체정지</button>
+  <button id="btnPickList" class="btn" title="불러온 목록에서 칸 채우기">🗂️ 목록</button>
+  <span class="hint" id="hint"></span>
+  <button id="btnHideBar" class="btn ghost" title="바 숨기기(H)">⌃</button>
+</header>
+
+<main id="grid" class="grid layout-3x2"><!-- JS가 타일 채움 --></main>
+
+<!-- 불러온 동영상 목록 (칸에 배정) -->
+<div id="listOverlay" class="overlay hidden">
+  <div class="sheet">
+    <div class="sheet-head"><span>불러온 동영상 (<span id="listCount">0</span>) — 클릭해 칸에 배정</span>
+      <button class="x" data-close>×</button></div>
+    <div id="listGrid" class="list-grid"></div>
+  </div>
+</div>
+
+<!-- 타일 설정(시작시간 등) -->
+<div id="optOverlay" class="overlay hidden">
+  <div class="sheet narrow">
+    <div class="sheet-head"><span id="optTitle">설정</span><button class="x" data-close>×</button></div>
+    <div class="opt-body">
+      <label>시작 시각 <small>(영상 길이 중 이 지점부터 재생)</small></label>
+      <div class="row"><input id="optStart" type="text" inputmode="numeric" placeholder="예: 1:23 또는 83" /><button id="optStartNow" class="btn sm">현재위치</button></div>
+      <label class="chk"><input id="optResume" type="checkbox" /> 이어보기(닫을 때 위치 기억)</label>
+      <label>볼륨 <input id="optVol" type="range" min="0" max="1" step="0.05" /></label>
+      <div class="row end">
+        <button id="optClear" class="btn ghost sm">설정 삭제</button>
+        <button id="optSave" class="btn sm primary">저장</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script>
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+</script>
+</body>
+</html>

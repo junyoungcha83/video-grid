@@ -52,22 +52,13 @@ function toItems(files) {
     .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
 }
 
-async function openViaFSA() {
-  let dir = await loadHandle();
+// '폴더 열기' = 항상 새 폴더를 고르게(이전 폴더 재오픈 버그 방지) + 그 핸들을 최신으로 저장.
+async function pickNewFolder() {
   try {
-    if (dir) {
-      const perm = await dir.queryPermission({ mode: 'read' });
-      if (perm !== 'granted') {
-        const req = await dir.requestPermission({ mode: 'read' });
-        if (req !== 'granted') dir = null;
-      }
-    }
-    if (!dir) {
-      dir = await window.showDirectoryPicker();
-      await saveHandle(dir);
-    }
-  } catch (e) { return null; } // 사용자가 취소
-  return enumerateDir(dir);
+    const dir = await window.showDirectoryPicker();
+    await saveHandle(dir);                 // 다음 실행 복원용으로 '최근' 폴더 갱신
+    return await enumerateDir(dir);
+  } catch (e) { return null; }             // 사용자가 취소
 }
 
 // 디렉터리 핸들 → 비디오 아이템 목록(key/size/mtime 채움)
@@ -126,26 +117,48 @@ function makeTile(item, idx) {
       v.play().catch(() => {});
     }, { once: true });
   });
-  // 이어보기 위치 저장(스로틀)
+  // 이어보기 저장(스로틀) + A-B 구간반복
   let lastSave = 0;
   v.addEventListener('timeupdate', () => {
     const o = getOpt(item.key);
+    if (o.loopOn && typeof o.loopA === 'number' && typeof o.loopB === 'number' && o.loopB > o.loopA + 0.1) {
+      if (v.currentTime >= o.loopB || v.currentTime < o.loopA - 0.4) { try { v.currentTime = o.loopA; } catch {} }
+    }
     if (o.resume && Date.now() - lastSave > 3000) { lastSave = Date.now(); o.pos = v.currentTime; setOpt(item.key, o); }
   });
 
+  const badge = document.createElement('div');
+  badge.className = 'ab-badge';
   const bar = document.createElement('div');
   bar.className = 'tilebar';
   bar.innerHTML = `<span class="nm" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>
     <span class="grow"></span>
+    <button class="ic ab-a" title="구간 시작점 A (현재위치)">A</button>
+    <button class="ic ab-b" title="구간 끝점 B (현재위치) → A–B 반복 시작">B</button>
+    <button class="ic ab-t" title="구간반복 켜기/끄기">🔁</button>
     <button class="ic mute" title="소리(클릭=이 영상만)">🔇</button>
-    <button class="ic gear" title="시작시간 등 설정">⚙︎</button>
+    <button class="ic gear" title="설정">⚙︎</button>
     <button class="ic close" title="이 칸 비우기">×</button>`;
+  function refreshAB() {
+    const o = getOpt(item.key);
+    const has = typeof o.loopA === 'number' && typeof o.loopB === 'number' && o.loopB > o.loopA;
+    bar.querySelector('.ab-a').classList.toggle('set', typeof o.loopA === 'number');
+    bar.querySelector('.ab-b').classList.toggle('set', typeof o.loopB === 'number');
+    bar.querySelector('.ab-t').classList.toggle('on', !!(o.loopOn && has));
+    badge.classList.toggle('show', !!(o.loopOn && has));
+    badge.textContent = has ? `🔁 ${fmtTime(o.loopA)}–${fmtTime(o.loopB)}` : '';
+  }
+  bar.querySelector('.ab-a').onclick = (e) => { e.stopPropagation(); const o = getOpt(item.key); o.loopA = +v.currentTime.toFixed(2); setOpt(item.key, o); refreshAB(); };
+  bar.querySelector('.ab-b').onclick = (e) => { e.stopPropagation(); const o = getOpt(item.key); o.loopB = +v.currentTime.toFixed(2); if (typeof o.loopA === 'number' && o.loopB > o.loopA) o.loopOn = true; setOpt(item.key, o); refreshAB(); };
+  bar.querySelector('.ab-t').onclick = (e) => { e.stopPropagation(); const o = getOpt(item.key); o.loopOn = !o.loopOn; setOpt(item.key, o); refreshAB(); if (o.loopOn && typeof o.loopA === 'number') { try { v.currentTime = o.loopA; } catch {} } };
   bar.querySelector('.mute').onclick = (e) => { e.stopPropagation(); soloAudio(idx); };
   bar.querySelector('.gear').onclick = (e) => { e.stopPropagation(); openOpt(idx); };
   bar.querySelector('.close').onclick = (e) => { e.stopPropagation(); cells[idx] = null; saveSession(); render(); };
 
   tile.appendChild(v);
+  tile.appendChild(badge);
   tile.appendChild(bar);
+  refreshAB();
   tile.addEventListener('click', () => soloAudio(idx));        // 타일 클릭 = 그 영상만 소리
   tile.addEventListener('dblclick', () => v.requestFullscreen?.());
   return tile;
@@ -238,13 +251,20 @@ document.getElementById('layoutSeg').onclick = (e) => {
   saveSession(); render();
 };
 document.getElementById('btnFolder').onclick = async () => {
-  if (window.showDirectoryPicker) {                 // 데스크톱 Chrome/Edge: 폴더 기억
-    setHint('폴더 선택…'); const items = await openViaFSA();
+  if (window.showDirectoryPicker) {                 // 데스크톱 Chrome/Edge: 항상 새 폴더 선택
+    setHint('폴더 선택…'); const items = await pickNewFolder();
     if (items) { currentSource = 'fsa'; restoreFromSettingsThenLoad(items); } else setHint('');
   } else {                                            // 그 외: webkitdirectory 폴더 input(데스크톱) — 모바일은 "파일 선택" 권장
     document.getElementById('dirPick').click();
   }
 };
+document.getElementById('btnSave').onclick = () => {
+  saveSession();                                     // 현재 폴더/파일·칸배치·레이아웃 저장(다음에 그대로 복원)
+  const b = document.getElementById('btnSave'); const t = b.textContent;
+  b.textContent = '저장됨 ✓'; setTimeout(() => (b.textContent = t), 1300);
+  setHint('현재 상태 저장됨');
+};
+document.getElementById('btnLoad').onclick = () => restoreSession();
 document.getElementById('dirPick').onchange = (e) => { const items = toItems([...e.target.files]); if (items.length) { currentSource = 'input'; restoreFromSettingsThenLoad(items); } e.target.value = ''; };
 document.getElementById('filePick').onchange = (e) => { const items = toItems([...e.target.files]); if (items.length) { currentSource = 'input'; restoreFromSettingsThenLoad(items); } e.target.value = ''; };
 document.getElementById('btnPlayAll').onclick = () => grid.querySelectorAll('video').forEach(v => v.play().catch(() => {}));
@@ -292,32 +312,38 @@ function showRestoreBanner(text, onClick) {
   b.querySelector('.rb-x').onclick = () => b.remove();
 }
 
-// 초기: 마지막 세션 자동 복원 (FSA 권한 있으면 자동, 없으면 1클릭/파일 재선택)
-(async () => {
-  if (!window.showDirectoryPicker) document.getElementById('btnFolder').title = '폴더 기억 미지원 — "파일 선택" 사용';
+// 저장된 세션 복원 (시작 시 + 📂 불러오기 버튼). FSA 권한 있으면 자동, 없으면 1클릭/파일 재선택.
+async function restoreSession() {
   const sess = loadSessionRaw();
-  if (sess.layout && LAYOUT_CELLS[sess.layout]) { layout = sess.layout; setLayoutUI(); }
-  cells = Array.from({ length: LAYOUT_CELLS[layout] }, () => null);
-  render();
-
+  if (sess.layout && LAYOUT_CELLS[sess.layout]) { layout = sess.layout; setLayoutUI(); cells = Array.from({ length: LAYOUT_CELLS[layout] }, () => null); render(); }
   let dir = null; try { dir = await loadHandle(); } catch {}
   if (dir) {
     let perm = 'prompt'; try { perm = await dir.queryPermission({ mode: 'read' }); } catch {}
-    if (perm === 'granted') {                                  // 권한 살아있으면 자동 복원
+    if (perm === 'granted') {
       try {
         const items = await enumerateDir(dir);
-        if (items.length) { currentSource = 'fsa'; setHint('이전 폴더 자동 복원됨'); restoreFromSettingsThenLoad(items); return; }
+        if (items.length) { currentSource = 'fsa'; setHint('이전 폴더 복원됨'); restoreFromSettingsThenLoad(items); return; }
       } catch {}
     }
-    showRestoreBanner(`📂 이전 폴더 다시 열기${sess.count ? ` · ${sess.count}개` : ''}`, async () => {  // 권한 재요청(1클릭)
+    showRestoreBanner(`📂 이전 폴더 다시 열기${sess.count ? ` · ${sess.count}개` : ''}`, async () => {
       try { if ((await dir.requestPermission({ mode: 'read' })) !== 'granted') { setHint('폴더 접근 권한 거부됨'); return; } } catch { return; }
       const items = await enumerateDir(dir);
       if (items.length) { currentSource = 'fsa'; restoreFromSettingsThenLoad(items); }
     });
     return;
   }
-  // 핸들이 없던(파일 선택/모바일) 세션 → 같은 칸 복원하려면 파일 재선택 필요
   if (Array.isArray(sess.cellKeys) && sess.cellKeys.some(Boolean)) {
     showRestoreBanner('📄 이전 파일 다시 선택 (같은 칸 자동 복원)', () => document.getElementById('filePick').click());
+  } else {
+    setHint('저장된 세션이 없습니다 — 폴더/파일을 불러오세요');
   }
+}
+
+// 초기 실행
+(async () => {
+  if (!window.showDirectoryPicker) document.getElementById('btnFolder').title = '폴더 기억 미지원 — "파일 선택" 사용';
+  const n = LAYOUT_CELLS[layout];
+  cells = Array.from({ length: n }, () => null);
+  render();
+  restoreSession();
 })();

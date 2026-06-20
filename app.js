@@ -8,6 +8,7 @@ let videos = [];          // 불러온 전체 목록: {key,name,size,mtime, getF
 let cells = [];           // 칸 배정: VideoItem | null
 let layout = '3x2';
 let selectedCell = 0;     // 설정/목록배정 대상 칸
+let currentSource = '';   // 'fsa' | 'input' — 마지막 불러오기 방식
 
 // ── 동영상별 옵션 (localStorage) ──────────────────────
 const fileKey = (f) => `${f.name}::${f.size}::${f.lastModified}`;
@@ -66,13 +67,17 @@ async function openViaFSA() {
       await saveHandle(dir);
     }
   } catch (e) { return null; } // 사용자가 취소
+  return enumerateDir(dir);
+}
+
+// 디렉터리 핸들 → 비디오 아이템 목록(key/size/mtime 채움)
+async function enumerateDir(dir) {
   const items = [];
   for await (const [name, handle] of dir.entries()) {
     if (handle.kind === 'file' && VIDEO_EXT.test(name)) {
       items.push({ name, _handle: handle, key: null, getFile: async function () { return this._file || (this._file = await this._handle.getFile()); } });
     }
   }
-  // key/size/mtime 채우기
   for (const it of items) { const f = await it.getFile(); it.key = fileKey(f); it.size = f.size; it.mtime = f.lastModified; }
   items.sort((a, b) => a.name.localeCompare(b.name, 'ko'));
   return items;
@@ -206,8 +211,9 @@ function curVideo(idx) { const t = grid.querySelector(`.tile[data-idx="${idx}"]`
 
 // ── 세션(최근) 저장/복원 ──────────────────────────────
 function saveSession() {
-  localStorage.setItem('vg:session', JSON.stringify({ layout, cellKeys: cells.map(c => c ? c.key : null) }));
+  localStorage.setItem('vg:session', JSON.stringify({ layout, cellKeys: cells.map(c => c ? c.key : null), source: currentSource, count: videos.length }));
 }
+function loadSessionRaw() { try { return JSON.parse(localStorage.getItem('vg:session') || '{}'); } catch { return {}; } }
 function restoreSessionInto() {
   try {
     const s = JSON.parse(localStorage.getItem('vg:session') || '{}');
@@ -234,13 +240,13 @@ document.getElementById('layoutSeg').onclick = (e) => {
 document.getElementById('btnFolder').onclick = async () => {
   if (window.showDirectoryPicker) {                 // 데스크톱 Chrome/Edge: 폴더 기억
     setHint('폴더 선택…'); const items = await openViaFSA();
-    if (items) restoreFromSettingsThenLoad(items); else setHint('');
+    if (items) { currentSource = 'fsa'; restoreFromSettingsThenLoad(items); } else setHint('');
   } else {                                            // 그 외: webkitdirectory 폴더 input(데스크톱) — 모바일은 "파일 선택" 권장
     document.getElementById('dirPick').click();
   }
 };
-document.getElementById('dirPick').onchange = (e) => { const items = toItems([...e.target.files]); if (items.length) restoreFromSettingsThenLoad(items); e.target.value = ''; };
-document.getElementById('filePick').onchange = (e) => { const items = toItems([...e.target.files]); restoreFromSettingsThenLoad(items); e.target.value = ''; };
+document.getElementById('dirPick').onchange = (e) => { const items = toItems([...e.target.files]); if (items.length) { currentSource = 'input'; restoreFromSettingsThenLoad(items); } e.target.value = ''; };
+document.getElementById('filePick').onchange = (e) => { const items = toItems([...e.target.files]); if (items.length) { currentSource = 'input'; restoreFromSettingsThenLoad(items); } e.target.value = ''; };
 document.getElementById('btnPlayAll').onclick = () => grid.querySelectorAll('video').forEach(v => v.play().catch(() => {}));
 document.getElementById('btnPauseAll').onclick = () => grid.querySelectorAll('video').forEach(v => v.pause());
 document.getElementById('btnPickList').onclick = () => { selectedCell = cells.findIndex(c => !c); if (selectedCell < 0) selectedCell = 0; openList(); };
@@ -274,13 +280,44 @@ window.addEventListener('beforeunload', () => {
 function setHint(s) { document.getElementById('hint').textContent = s || ''; }
 function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
-// 초기: FSA 핸들이 있으면 안내
+// 시작 시 복원 배너(중앙)
+function showRestoreBanner(text, onClick) {
+  document.getElementById('restoreBanner')?.remove();
+  const b = document.createElement('div');
+  b.id = 'restoreBanner'; b.className = 'restore-banner';
+  b.innerHTML = `<button class="rb-btn"></button><button class="rb-x" title="닫기">×</button>`;
+  b.querySelector('.rb-btn').textContent = text;
+  document.body.appendChild(b);
+  b.querySelector('.rb-btn').onclick = async () => { b.remove(); try { await onClick(); } catch {} };
+  b.querySelector('.rb-x').onclick = () => b.remove();
+}
+
+// 초기: 마지막 세션 자동 복원 (FSA 권한 있으면 자동, 없으면 1클릭/파일 재선택)
 (async () => {
-  const n = LAYOUT_CELLS[layout];
-  cells = Array.from({ length: n }, () => null);
+  if (!window.showDirectoryPicker) document.getElementById('btnFolder').title = '폴더 기억 미지원 — "파일 선택" 사용';
+  const sess = loadSessionRaw();
+  if (sess.layout && LAYOUT_CELLS[sess.layout]) { layout = sess.layout; setLayoutUI(); }
+  cells = Array.from({ length: LAYOUT_CELLS[layout] }, () => null);
   render();
-  try { if (await loadHandle()) setHint('이전 폴더 있음 — "폴더 열기"로 다시 불러오기'); } catch {}
-  if (!window.showDirectoryPicker) {
-    document.getElementById('btnFolder').title = '이 브라우저는 폴더 기억 미지원 — "파일 선택" 사용';
+
+  let dir = null; try { dir = await loadHandle(); } catch {}
+  if (dir) {
+    let perm = 'prompt'; try { perm = await dir.queryPermission({ mode: 'read' }); } catch {}
+    if (perm === 'granted') {                                  // 권한 살아있으면 자동 복원
+      try {
+        const items = await enumerateDir(dir);
+        if (items.length) { currentSource = 'fsa'; setHint('이전 폴더 자동 복원됨'); restoreFromSettingsThenLoad(items); return; }
+      } catch {}
+    }
+    showRestoreBanner(`📂 이전 폴더 다시 열기${sess.count ? ` · ${sess.count}개` : ''}`, async () => {  // 권한 재요청(1클릭)
+      try { if ((await dir.requestPermission({ mode: 'read' })) !== 'granted') { setHint('폴더 접근 권한 거부됨'); return; } } catch { return; }
+      const items = await enumerateDir(dir);
+      if (items.length) { currentSource = 'fsa'; restoreFromSettingsThenLoad(items); }
+    });
+    return;
+  }
+  // 핸들이 없던(파일 선택/모바일) 세션 → 같은 칸 복원하려면 파일 재선택 필요
+  if (Array.isArray(sess.cellKeys) && sess.cellKeys.some(Boolean)) {
+    showRestoreBanner('📄 이전 파일 다시 선택 (같은 칸 자동 복원)', () => document.getElementById('filePick').click());
   }
 })();

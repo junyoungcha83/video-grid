@@ -42,8 +42,10 @@ function idb() {
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
 }
-async function saveHandle(h) { const db = await idb(); db.transaction('h', 'readwrite').objectStore('h').put(h, 'dir'); }
-async function loadHandle() { const db = await idb(); return new Promise(r => { const q = db.transaction('h', 'readonly').objectStore('h').get('dir'); q.onsuccess = () => r(q.result || null); q.onerror = () => r(null); }); }
+async function saveHandle(h, key = 'dir') { const db = await idb(); db.transaction('h', 'readwrite').objectStore('h').put(h, key); }
+async function loadHandle(key = 'dir') { const db = await idb(); return new Promise(r => { const q = db.transaction('h', 'readonly').objectStore('h').get(key); q.onsuccess = () => r(q.result || null); q.onerror = () => r(null); }); }
+async function deleteHandle(key) { const db = await idb(); db.transaction('h', 'readwrite').objectStore('h').delete(key); }
+async function copyHandle(from, to) { const h = await loadHandle(from); if (h) await saveHandle(h, to); else await deleteHandle(to); }
 
 // ── 파일 불러오기 ─────────────────────────────────────
 function toItems(files) {
@@ -258,13 +260,87 @@ document.getElementById('btnFolder').onclick = async () => {
     document.getElementById('dirPick').click();
   }
 };
-document.getElementById('btnSave').onclick = () => {
-  saveSession();                                     // 현재 폴더/파일·칸배치·레이아웃 저장(다음에 그대로 복원)
-  const b = document.getElementById('btnSave'); const t = b.textContent;
-  b.textContent = '저장됨 ✓'; setTimeout(() => (b.textContent = t), 1300);
-  setHint('현재 상태 저장됨');
-};
-document.getElementById('btnLoad').onclick = () => restoreSession();
+// ── 설정 슬롯 A/B/C (각자 비밀번호 선택) ─────────────
+const SLOTS = ['A', 'B', 'C'];
+function slotMeta(s) { try { return JSON.parse(localStorage.getItem('vg:slot:' + s) || 'null'); } catch { return null; } }
+function slotPw(s) { return localStorage.getItem('vg:pw:' + s) || ''; }
+async function pwHash(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('vg-salt:' + str));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function updateSlotUI() {
+  document.querySelectorAll('.slot').forEach(btn => {
+    const s = btn.dataset.slot, meta = slotMeta(s), locked = !!slotPw(s);
+    btn.classList.toggle('has', !!meta);
+    btn.classList.toggle('locked', locked);
+    btn.textContent = (locked ? '🔒' : '') + s;
+    btn.title = meta ? `슬롯 ${s} · ${meta.count || 0}개${locked ? ' · 비번잠금' : ''} (누르기=불러오기 · 길게=관리)`
+                     : `슬롯 ${s} 비어있음 (누르기=현재 상태 저장 · 길게=관리)`;
+  });
+}
+async function saveSlot(s) {
+  if (!videos.length) { setHint('먼저 폴더/파일을 불러온 뒤 저장하세요'); return; }
+  saveSession();                                                  // 현재 상태를 vg:session에 스냅샷
+  localStorage.setItem('vg:slot:' + s, localStorage.getItem('vg:session') || '{}');
+  if (currentSource === 'fsa') await copyHandle('dir', 'dir:' + s); else await deleteHandle('dir:' + s);
+  updateSlotUI(); setHint(`슬롯 ${s}에 저장됨${slotPw(s) ? ' (비번잠금)' : ''}`);
+}
+async function loadSlot(s) {
+  const meta = slotMeta(s);
+  if (!meta) { setHint(`슬롯 ${s}는 비어있습니다`); return; }
+  const pw = slotPw(s);
+  if (pw) {
+    const inp = prompt(`슬롯 ${s} 비밀번호를 입력하세요`);
+    if (inp === null) return;
+    if (await pwHash(inp) !== pw) { alert('비밀번호가 틀렸습니다.'); return; }
+  }
+  localStorage.setItem('vg:session', JSON.stringify(meta));       // 이 슬롯을 현재 세션으로
+  await copyHandle('dir:' + s, 'dir');
+  await restoreSession();
+}
+async function setSlotPassword(s) {
+  const pw = prompt(`슬롯 ${s} 비밀번호 설정\n(빈칸으로 두면 잠금 해제 — 누구나 불러오기 가능)`, '');
+  if (pw === null) return;
+  if (pw === '') { localStorage.removeItem('vg:pw:' + s); setHint(`슬롯 ${s} 잠금 해제됨`); }
+  else { localStorage.setItem('vg:pw:' + s, await pwHash(pw)); setHint(`슬롯 ${s} 비밀번호 설정됨 🔒`); }
+  updateSlotUI();
+}
+function deleteSlot(s) {
+  if (!slotMeta(s) && !slotPw(s)) { setHint(`슬롯 ${s}는 이미 비어있습니다`); return; }
+  if (!confirm(`슬롯 ${s}의 저장 내용과 비밀번호를 삭제할까요?`)) return;
+  localStorage.removeItem('vg:slot:' + s); localStorage.removeItem('vg:pw:' + s);
+  deleteHandle('dir:' + s); updateSlotUI(); setHint(`슬롯 ${s} 삭제됨`);
+}
+// 슬롯 버튼: 짧게=불러오기(빈칸은 저장) · 길게=관리 메뉴
+const slotMenu = document.getElementById('slotMenu');
+let menuSlot = null;
+document.querySelectorAll('.slot').forEach(btn => {
+  const s = btn.dataset.slot;
+  let timer = null, longPressed = false;
+  const start = () => { longPressed = false; timer = setTimeout(() => { longPressed = true; openSlotMenu(s, btn); }, 500); };
+  const cancel = () => { clearTimeout(timer); };
+  btn.addEventListener('pointerdown', start);
+  btn.addEventListener('pointerup', () => { cancel(); if (longPressed) return; slotMeta(s) ? loadSlot(s) : saveSlot(s); });
+  btn.addEventListener('pointerleave', cancel);
+  btn.addEventListener('contextmenu', e => { e.preventDefault(); openSlotMenu(s, btn); });
+});
+function openSlotMenu(s, btn) {
+  menuSlot = s;
+  document.getElementById('smName').textContent = s;
+  const r = btn.getBoundingClientRect();
+  slotMenu.style.left = Math.min(r.left, innerWidth - 200) + 'px';
+  slotMenu.style.top = (r.bottom + 6) + 'px';
+  slotMenu.classList.remove('hidden');
+}
+function closeSlotMenu() { slotMenu.classList.add('hidden'); menuSlot = null; }
+slotMenu.querySelectorAll('button').forEach(b => b.onclick = async () => {
+  const s = menuSlot, act = b.dataset.act; closeSlotMenu();
+  if (act === 'load') loadSlot(s);
+  else if (act === 'save') saveSlot(s);
+  else if (act === 'pw') setSlotPassword(s);
+  else if (act === 'del') deleteSlot(s);
+});
+document.addEventListener('pointerdown', e => { if (!slotMenu.contains(e.target) && !e.target.closest('.slot')) closeSlotMenu(); });
 document.getElementById('dirPick').onchange = (e) => { const items = toItems([...e.target.files]); if (items.length) { currentSource = 'input'; restoreFromSettingsThenLoad(items); } e.target.value = ''; };
 document.getElementById('filePick').onchange = (e) => { const items = toItems([...e.target.files]); if (items.length) { currentSource = 'input'; restoreFromSettingsThenLoad(items); } e.target.value = ''; };
 document.getElementById('btnPlayAll').onclick = () => grid.querySelectorAll('video').forEach(v => v.play().catch(() => {}));
@@ -342,8 +418,9 @@ async function restoreSession() {
 // 초기 실행
 (async () => {
   if (!window.showDirectoryPicker) document.getElementById('btnFolder').title = '폴더 기억 미지원 — "파일 선택" 사용';
-  const n = LAYOUT_CELLS[layout];
-  cells = Array.from({ length: n }, () => null);
+  cells = Array.from({ length: LAYOUT_CELLS[layout] }, () => null);
   render();
-  restoreSession();
+  updateSlotUI();
+  const filled = SLOTS.filter(s => slotMeta(s));
+  setHint(filled.length ? `슬롯 ${filled.join('/')} 저장됨 — 눌러서 불러오기` : '폴더/파일을 불러온 뒤 A·B·C에 저장하세요');
 })();

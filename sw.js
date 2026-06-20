@@ -1,5 +1,5 @@
 // 앱 셸 오프라인 캐시. 캐시 이름 바꾸면 옛 캐시 자동 폐기.
-const CACHE = 'video-grid-v3';
+const CACHE = 'video-grid-v4';
 const ASSETS = ['./', './index.html', './app.js', './styles.css', './manifest.webmanifest', './icon.svg', './icon-maskable.svg'];
 
 self.addEventListener('install', (e) => {

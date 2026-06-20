@@ -24,8 +24,12 @@
     <input id="filePick" type="file" accept="video/*" multiple hidden />
   </label>
   <input id="dirPick" type="file" accept="video/*" multiple webkitdirectory hidden />
-  <button id="btnSave" class="btn" title="현재 폴더/파일·칸배치·레이아웃 저장">💾 저장</button>
-  <button id="btnLoad" class="btn" title="저장한 세션 불러오기">📂 불러오기</button>
+  <span class="lbl">설정</span>
+  <div class="slots" id="slots">
+    <button class="slot" data-slot="A" title="누르기=불러오기 · 길게=저장/비번/삭제">A</button>
+    <button class="slot" data-slot="B" title="누르기=불러오기 · 길게=저장/비번/삭제">B</button>
+    <button class="slot" data-slot="C" title="누르기=불러오기 · 길게=저장/비번/삭제">C</button>
+  </div>
   <span class="sep"></span>
   <span class="lbl">배열</span>
   <div class="seg" id="layoutSeg">
@@ -68,6 +72,15 @@
       </div>
     </div>
   </div>
+</div>
+
+<!-- 슬롯 관리 메뉴(길게 누르기) -->
+<div id="slotMenu" class="slot-menu hidden">
+  <div class="sm-title">슬롯 <span id="smName">A</span></div>
+  <button data-act="load">▶︎ 불러오기</button>
+  <button data-act="save">💾 현재 상태 저장</button>
+  <button data-act="pw">🔒 비밀번호 설정/변경</button>
+  <button data-act="del">🗑 삭제</button>
 </div>
 
 <script src="app.js"></script>

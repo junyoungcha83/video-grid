@@ -21,6 +21,21 @@ body { display: flex; flex-direction: column; height: 100dvh; }
 .seg button { background: #1c2530; color: #cbd5e1; border: none; padding: 6px 10px; font-size: 12px; cursor: pointer; }
 .seg button.on { background: var(--accent); color: #03212e; font-weight: 700; }
 .hint { font-size: 12px; color: #8aa0b6; margin-left: 6px; }
+/* 설정 슬롯 A/B/C */
+.slots { display: inline-flex; gap: 4px; }
+.slot { width: 36px; height: 32px; background: #1c2530; color: #8aa0b6; border: 1px solid #2b3644;
+  border-radius: 8px; font-size: 13px; font-weight: 800; cursor: pointer; user-select: none; touch-action: none; }
+.slot:hover { background: #243040; }
+.slot.has { color: var(--accent); border-color: var(--accent); }       /* 저장됨 */
+.slot.has.locked { background: var(--accent); color: #03212e; }          /* 저장+비번 */
+.slot-menu { position: fixed; z-index: 70; background: #11161d; border: 1px solid #2b3644;
+  border-radius: 10px; padding: 6px; min-width: 190px; box-shadow: 0 12px 30px rgba(0,0,0,.6);
+  display: flex; flex-direction: column; gap: 2px; }
+.slot-menu.hidden { display: none; }
+.slot-menu .sm-title { font-size: 12px; color: #93a1b3; padding: 4px 8px 6px; border-bottom: 1px solid #1f2733; margin-bottom: 2px; }
+.slot-menu button { text-align: left; background: transparent; border: none; color: #e5e7eb;
+  padding: 8px 10px; font-size: 13px; border-radius: 6px; cursor: pointer; }
+.slot-menu button:hover { background: #1c2530; }
 .topbar .btn:last-child { margin-left: auto; }
 body.bar-hidden .topbar { display: none; }
 

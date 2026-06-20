@@ -119,49 +119,97 @@ function makeTile(item, idx) {
       v.play().catch(() => {});
     }, { once: true });
   });
-  // 이어보기 저장(스로틀) + A-B 구간반복
+  const dur = () => (isFinite(v.duration) ? v.duration : 0);
+
+  // ── 하단 바: 타임라인(전체길이 표시 + 드래그로 위치/구간 지정) + 컨트롤 ──
+  const bar = document.createElement('div');
+  bar.className = 'tilebar';
+  bar.innerHTML = `
+    <div class="seekrow">
+      <span class="t-cur">0:00</span>
+      <div class="seek">
+        <div class="seek-region"></div>
+        <div class="seek-played"></div>
+        <div class="seek-hand sa" title="구간 시작 A — 드래그"></div>
+        <div class="seek-hand sb" title="구간 끝 B — 드래그"></div>
+      </div>
+      <span class="t-dur">0:00</span>
+    </div>
+    <div class="btnrow">
+      <span class="nm" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>
+      <span class="grow"></span>
+      <button class="ic ab-t" title="구간반복 켜기/끄기">🔁</button>
+      <button class="ic ab-clr" title="구간 해제">⤫</button>
+      <button class="ic mute" title="소리(클릭=이 영상만)">🔇</button>
+      <button class="ic gear" title="설정">⚙︎</button>
+      <button class="ic close" title="이 칸 비우기">×</button>
+    </div>`;
+  const seek = bar.querySelector('.seek');
+  const elRegion = bar.querySelector('.seek-region'), elPlayed = bar.querySelector('.seek-played');
+  const elA = bar.querySelector('.sa'), elB = bar.querySelector('.sb');
+  const elCur = bar.querySelector('.t-cur'), elDur = bar.querySelector('.t-dur');
+
+  function ab() { const o = getOpt(item.key), d = dur();
+    return { o, d, A: (typeof o.loopA === 'number') ? o.loopA : 0, B: (typeof o.loopB === 'number') ? o.loopB : d }; }
+  function layoutSeek() {
+    const { o, d, A, B } = ab(); if (!d) return;
+    const pa = Math.max(0, Math.min(1, A / d)) * 100, pb = Math.max(0, Math.min(1, B / d)) * 100;
+    elA.style.left = pa + '%'; elB.style.left = pb + '%';
+    elRegion.style.left = pa + '%'; elRegion.style.width = Math.max(0, pb - pa) + '%';
+    const active = !!o.loopOn && B > A;
+    seek.classList.toggle('looping', active);
+    bar.querySelector('.ab-t').classList.toggle('on', active);
+    elDur.textContent = fmtTime(d);
+  }
+  function playhead() { const d = dur(); if (!d) return;
+    elPlayed.style.width = Math.min(100, v.currentTime / d * 100) + '%'; elCur.textContent = fmtTime(v.currentTime); }
+
+  v.addEventListener('loadedmetadata', () => { layoutSeek(); playhead(); });
+  v.addEventListener('durationchange', () => { layoutSeek(); });   // webm 등 길이 나중 확정 대응
+
+  const fracFromX = (x) => { const r = seek.getBoundingClientRect(); return Math.min(1, Math.max(0, (x - r.left) / r.width)); };
+  function dragHandler(kind) {
+    return (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const move = (ev) => {
+        const d = dur(); if (!d) return;
+        const t = fracFromX(ev.clientX) * d, o = getOpt(item.key);
+        if (kind === 'seek') { try { v.currentTime = t; } catch {} playhead(); return; }
+        if (kind === 'a') { const B = (typeof o.loopB === 'number') ? o.loopB : d; o.loopA = Math.min(t, B - 0.2); o.loopOn = true; }
+        else { const A = (typeof o.loopA === 'number') ? o.loopA : 0; o.loopB = Math.max(t, A + 0.2); o.loopOn = true; }
+        setOpt(item.key, o); layoutSeek();
+      };
+      move(e);
+      const up = () => { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); };
+      document.addEventListener('pointermove', move); document.addEventListener('pointerup', up);
+    };
+  }
+  seek.addEventListener('pointerdown', dragHandler('seek'));
+  elA.addEventListener('pointerdown', dragHandler('a'));
+  elB.addEventListener('pointerdown', dragHandler('b'));
+
+  bar.addEventListener('click', (e) => e.stopPropagation());   // 바 조작은 타일 solo로 안 번지게
+  bar.querySelector('.ab-t').onclick = () => { const o = getOpt(item.key); o.loopOn = !o.loopOn; setOpt(item.key, o); layoutSeek(); if (o.loopOn) { try { v.currentTime = ab().A; } catch {} } };
+  bar.querySelector('.ab-clr').onclick = () => { const o = getOpt(item.key); delete o.loopA; delete o.loopB; o.loopOn = false; setOpt(item.key, o); layoutSeek(); };
+  bar.querySelector('.mute').onclick = () => soloAudio(idx);
+  bar.querySelector('.gear').onclick = () => openOpt(idx);
+  bar.querySelector('.close').onclick = () => { cells[idx] = null; saveSession(); render(); };
+
+  // 재생 위치 갱신 + 구간반복 + 이어보기 저장
   let lastSave = 0;
   v.addEventListener('timeupdate', () => {
     const o = getOpt(item.key);
-    if (o.loopOn && typeof o.loopA === 'number' && typeof o.loopB === 'number' && o.loopB > o.loopA + 0.1) {
-      if (v.currentTime >= o.loopB || v.currentTime < o.loopA - 0.4) { try { v.currentTime = o.loopA; } catch {} }
+    if (o.loopOn && typeof o.loopA === 'number' && typeof o.loopB === 'number' && o.loopB > o.loopA + 0.05) {
+      if (v.currentTime >= o.loopB - 0.03 || v.currentTime < o.loopA - 0.25) { try { v.currentTime = o.loopA; } catch {} }
     }
+    playhead();
     if (o.resume && Date.now() - lastSave > 3000) { lastSave = Date.now(); o.pos = v.currentTime; setOpt(item.key, o); }
   });
 
-  const badge = document.createElement('div');
-  badge.className = 'ab-badge';
-  const bar = document.createElement('div');
-  bar.className = 'tilebar';
-  bar.innerHTML = `<span class="nm" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>
-    <span class="grow"></span>
-    <button class="ic ab-a" title="구간 시작점 A (현재위치)">A</button>
-    <button class="ic ab-b" title="구간 끝점 B (현재위치) → A–B 반복 시작">B</button>
-    <button class="ic ab-t" title="구간반복 켜기/끄기">🔁</button>
-    <button class="ic mute" title="소리(클릭=이 영상만)">🔇</button>
-    <button class="ic gear" title="설정">⚙︎</button>
-    <button class="ic close" title="이 칸 비우기">×</button>`;
-  function refreshAB() {
-    const o = getOpt(item.key);
-    const has = typeof o.loopA === 'number' && typeof o.loopB === 'number' && o.loopB > o.loopA;
-    bar.querySelector('.ab-a').classList.toggle('set', typeof o.loopA === 'number');
-    bar.querySelector('.ab-b').classList.toggle('set', typeof o.loopB === 'number');
-    bar.querySelector('.ab-t').classList.toggle('on', !!(o.loopOn && has));
-    badge.classList.toggle('show', !!(o.loopOn && has));
-    badge.textContent = has ? `🔁 ${fmtTime(o.loopA)}–${fmtTime(o.loopB)}` : '';
-  }
-  bar.querySelector('.ab-a').onclick = (e) => { e.stopPropagation(); const o = getOpt(item.key); o.loopA = +v.currentTime.toFixed(2); setOpt(item.key, o); refreshAB(); };
-  bar.querySelector('.ab-b').onclick = (e) => { e.stopPropagation(); const o = getOpt(item.key); o.loopB = +v.currentTime.toFixed(2); if (typeof o.loopA === 'number' && o.loopB > o.loopA) o.loopOn = true; setOpt(item.key, o); refreshAB(); };
-  bar.querySelector('.ab-t').onclick = (e) => { e.stopPropagation(); const o = getOpt(item.key); o.loopOn = !o.loopOn; setOpt(item.key, o); refreshAB(); if (o.loopOn && typeof o.loopA === 'number') { try { v.currentTime = o.loopA; } catch {} } };
-  bar.querySelector('.mute').onclick = (e) => { e.stopPropagation(); soloAudio(idx); };
-  bar.querySelector('.gear').onclick = (e) => { e.stopPropagation(); openOpt(idx); };
-  bar.querySelector('.close').onclick = (e) => { e.stopPropagation(); cells[idx] = null; saveSession(); render(); };
-
   tile.appendChild(v);
-  tile.appendChild(badge);
   tile.appendChild(bar);
-  refreshAB();
-  tile.addEventListener('click', () => soloAudio(idx));        // 타일 클릭 = 그 영상만 소리
+  layoutSeek();
+  tile.addEventListener('click', () => soloAudio(idx));        // 영상 클릭 = 그 영상만 소리
   tile.addEventListener('dblclick', () => v.requestFullscreen?.());
   return tile;
 }

@@ -76,6 +76,45 @@ async function enumerateDir(dir) {
   return items;
 }
 
+// 저장된 핸들(디렉터리 또는 파일핸들 배열) → 아이템 목록
+function itemFromFileHandle(h) {
+  return { name: h.name, _handle: h, key: null, getFile: async function () { return this._file || (this._file = await this._handle.getFile()); } };
+}
+async function itemsFromStored(stored) {
+  if (!stored) return null;
+  if (!Array.isArray(stored) && stored.kind === 'directory') return enumerateDir(stored);
+  const handles = Array.isArray(stored) ? stored : [stored];
+  const items = handles.filter(h => h && h.kind === 'file').map(itemFromFileHandle);
+  for (const it of items) { const f = await it.getFile(); it.key = fileKey(f); it.size = f.size; it.mtime = f.lastModified; }
+  items.sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  return items;
+}
+// 권한 조회/요청 (디렉터리=핸들1개, 파일배열=각 핸들)
+async function permState(stored) {
+  for (const h of (Array.isArray(stored) ? stored : [stored])) {
+    try { if ((await h.queryPermission({ mode: 'read' })) !== 'granted') return 'prompt'; } catch { return 'prompt'; }
+  }
+  return 'granted';
+}
+async function requestPermFor(stored) {
+  for (const h of (Array.isArray(stored) ? stored : [stored])) {
+    try { if ((await h.requestPermission({ mode: 'read' })) !== 'granted') return false; } catch { return false; }
+  }
+  return true;
+}
+// '파일 선택'을 핸들 기반으로(가능 시) → 재선택 없이 슬롯 복원 가능
+async function pickFiles() {
+  try {
+    const handles = await window.showOpenFilePicker({
+      multiple: true,
+      types: [{ description: 'Video', accept: { 'video/*': ['.mp4', '.m4v', '.webm', '.mov', '.mkv', '.avi', '.ogv'] } }],
+    });
+    if (!handles || !handles.length) return null;
+    await saveHandle(handles);             // 파일핸들 배열을 '최근'으로 저장
+    return await itemsFromStored(handles);
+  } catch (e) { return null; }             // 사용자가 취소
+}
+
 async function loadVideos(items) {
   if (!items || !items.length) { setHint('동영상을 찾지 못했습니다.'); return; }
   videos = items;
@@ -308,6 +347,14 @@ document.getElementById('btnFolder').onclick = async () => {
     document.getElementById('dirPick').click();
   }
 };
+document.getElementById('btnFiles').onclick = async () => {
+  if (window.showOpenFilePicker) {                  // 핸들 기반 → 슬롯 저장 시 재선택 없이 복원
+    setHint('파일 선택…'); const items = await pickFiles();
+    if (items) { currentSource = 'fsa'; restoreFromSettingsThenLoad(items); } else setHint('');
+  } else {                                            // 미지원(사파리/모바일 일부): input 폴백(복원 시 재선택 필요)
+    document.getElementById('filePick').click();
+  }
+};
 // ── 설정 슬롯 A/B/C (각자 비밀번호 선택) ─────────────
 const SLOTS = ['A', 'B', 'C'];
 function slotMeta(s) { try { return JSON.parse(localStorage.getItem('vg:slot:' + s) || 'null'); } catch { return null; } }
@@ -440,23 +487,24 @@ function showRestoreBanner(text, onClick) {
 async function restoreSession() {
   const sess = loadSessionRaw();
   if (sess.layout && LAYOUT_CELLS[sess.layout]) { layout = sess.layout; setLayoutUI(); cells = Array.from({ length: LAYOUT_CELLS[layout] }, () => null); render(); }
-  let dir = null; try { dir = await loadHandle(); } catch {}
-  if (dir) {
-    let perm = 'prompt'; try { perm = await dir.queryPermission({ mode: 'read' }); } catch {}
-    if (perm === 'granted') {
+  let stored = null; try { stored = await loadHandle(); } catch {}
+  if (stored) {
+    const isDir = !Array.isArray(stored) && stored.kind === 'directory';
+    let perm = 'prompt'; try { perm = await permState(stored); } catch {}
+    if (perm === 'granted') {                                   // 권한 유지 → 재선택 없이 자동 복원
       try {
-        const items = await enumerateDir(dir);
-        if (items.length) { currentSource = 'fsa'; setHint('이전 폴더 복원됨'); restoreFromSettingsThenLoad(items); return; }
+        const items = await itemsFromStored(stored);
+        if (items && items.length) { currentSource = 'fsa'; setHint(isDir ? '이전 폴더 복원됨' : '이전 파일 복원됨'); restoreFromSettingsThenLoad(items); return; }
       } catch {}
     }
-    showRestoreBanner(`📂 이전 폴더 다시 열기${sess.count ? ` · ${sess.count}개` : ''}`, async () => {
-      try { if ((await dir.requestPermission({ mode: 'read' })) !== 'granted') { setHint('폴더 접근 권한 거부됨'); return; } } catch { return; }
-      const items = await enumerateDir(dir);
-      if (items.length) { currentSource = 'fsa'; restoreFromSettingsThenLoad(items); }
+    showRestoreBanner(`${isDir ? '📂 이전 폴더 다시 열기' : '📄 이전 파일 다시 열기'}${sess.count ? ` · ${sess.count}개` : ''}`, async () => {
+      if (!(await requestPermFor(stored))) { setHint('접근 권한 거부됨'); return; }
+      const items = await itemsFromStored(stored);
+      if (items && items.length) { currentSource = 'fsa'; restoreFromSettingsThenLoad(items); }
     });
     return;
   }
-  if (Array.isArray(sess.cellKeys) && sess.cellKeys.some(Boolean)) {
+  if (Array.isArray(sess.cellKeys) && sess.cellKeys.some(Boolean)) {     // input 폴백 세션 → 재선택 필요
     showRestoreBanner('📄 이전 파일 다시 선택 (같은 칸 자동 복원)', () => document.getElementById('filePick').click());
   } else {
     setHint('저장된 세션이 없습니다 — 폴더/파일을 불러오세요');

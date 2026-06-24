@@ -599,11 +599,38 @@ async function restoreSession() {
   }
 }
 
-// 시작 시 자동복원 — 마지막 콘텐츠가 비번 슬롯이면 잠금화면 먼저(통과 후 복원), 아니면 바로 복원.
+// 두 핸들(또는 핸들 배열)이 같은 대상을 가리키는지 — 순서 무관 비교.
+async function handlesSame(a, b) {
+  const A = Array.isArray(a) ? a : [a], B = Array.isArray(b) ? b : [b];
+  if (A.length !== B.length) return false;
+  for (const ha of A) {
+    let found = false;
+    for (const hb of B) { try { if (await ha.isSameEntry(hb)) { found = true; break; } } catch {} }
+    if (!found) return false;
+  }
+  return true;
+}
+// 지금 자동복원될 'dir' 핸들이 비번 걸린 슬롯의 저장 핸들과 같으면 → 그 슬롯 반환(잠금 대상).
+async function protectedSlotForCurrentDir() {
+  let dir = null; try { dir = await loadHandle('dir'); } catch {}
+  if (!dir) return null;
+  for (const s of SLOTS) {
+    if (!slotPw(s) || !slotMeta(s)) continue;
+    let sh = null; try { sh = await loadHandle('dir:' + s); } catch {}
+    if (sh && await handlesSame(dir, sh)) return s;
+  }
+  return null;
+}
+
+// 시작 시 자동복원 — 복원될 콘텐츠가 비번 슬롯이면(활성슬롯 추적이 끊겼어도 핸들 비교로 판단)
+// 잠금화면을 먼저 띄우고 통과 후에만 복원. 아니면 바로 복원.
 async function bootRestore() {
-  const s = getActiveSlot();
-  if (s && slotPw(s) && slotMeta(s)) {
-    lockApp(s, async () => { await restoreSession(); });
+  const a = getActiveSlot();
+  let lockSlot = (a && slotPw(a) && slotMeta(a)) ? a : null;
+  if (!lockSlot) lockSlot = await protectedSlotForCurrentDir();
+  if (lockSlot) {
+    const ls = lockSlot;
+    lockApp(ls, async () => { setActiveSlot(ls); await restoreSession(); });
   } else {
     await restoreSession();
   }

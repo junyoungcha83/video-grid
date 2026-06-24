@@ -141,8 +141,8 @@ function makeTile(item, idx) {
   tile.className = 'tile' + (item ? '' : ' empty');
   tile.dataset.idx = idx;
   if (!item) {
-    tile.innerHTML = `<button class="add" title="이 칸에 영상 배정">＋</button>`;
-    tile.querySelector('.add').onclick = () => { selectedCell = idx; openList(); };
+    tile.innerHTML = `<button class="add" title="이 칸에 동영상 파일 추가">＋</button>`;
+    tile.querySelector('.add').onclick = () => { addFileToCell(idx); };
     return tile;
   }
   const v = document.createElement('video');
@@ -276,6 +276,39 @@ function openList() {
     saveSession(); render(); closeOverlays();
   });
   listOv.classList.remove('hidden');
+}
+
+// ── 칸별 개별 파일 추가(빈 칸 ＋ 버튼) ────────────────
+let cellAddTargetIdx = -1;
+async function addFileToCell(idx) {
+  if (window.showOpenFilePicker) {
+    let handles;
+    try {
+      handles = await window.showOpenFilePicker({
+        multiple: true,
+        types: [{ description: 'Video', accept: { 'video/*': ['.mp4', '.m4v', '.webm', '.mov', '.mkv', '.avi', '.ogv'] } }],
+      });
+    } catch { return; }                      // 사용자가 취소
+    if (!handles || !handles.length) return;
+    const items = await itemsFromStored(handles);
+    assignItemsToCell(idx, items);
+    // 현재 불러온 모든 FSA 파일핸들을 보존 → 재실행 시 동일 세트 복원
+    const all = videos.map(v => v._handle).filter(Boolean);
+    if (all.length) { currentSource = 'fsa'; setActiveSlot(null); await saveHandle(all); }
+  } else {
+    cellAddTargetIdx = idx;                   // input 폴백(사파리/모바일 일부)
+    document.getElementById('cellFilePick').click();
+  }
+}
+// 추가한 영상을 목록에 합치고 첫 항목은 이 칸, 나머지는 이후 빈 칸에 채움
+function assignItemsToCell(idx, items) {
+  if (!items || !items.length) return;
+  for (const it of items) { if (!videos.some(v => v.key === it.key)) videos.push(it); }
+  cells[idx] = items[0];
+  let j = 1;
+  for (let c = 0; c < cells.length && j < items.length; c++) { if (!cells[c]) cells[c] = items[j++]; }
+  setHint(`${items.length}개 추가됨`);
+  saveSession(); render();
 }
 
 // ── 설정 오버레이 ─────────────────────────────────────
@@ -482,6 +515,7 @@ slotMenu.querySelectorAll('button').forEach(b => b.onclick = async () => {
 document.addEventListener('pointerdown', e => { if (!slotMenu.contains(e.target) && !e.target.closest('.slot')) closeSlotMenu(); });
 document.getElementById('dirPick').onchange = (e) => { const items = toItems([...e.target.files]); if (items.length) { currentSource = 'input'; setActiveSlot(null); restoreFromSettingsThenLoad(items); } e.target.value = ''; };
 document.getElementById('filePick').onchange = (e) => { const items = toItems([...e.target.files]); if (items.length) { currentSource = 'input'; setActiveSlot(null); restoreFromSettingsThenLoad(items); } e.target.value = ''; };
+document.getElementById('cellFilePick').onchange = (e) => { const items = toItems([...e.target.files]); if (items.length && cellAddTargetIdx >= 0) { if (currentSource !== 'fsa') currentSource = 'input'; assignItemsToCell(cellAddTargetIdx, items); } cellAddTargetIdx = -1; e.target.value = ''; };
 document.getElementById('btnPlayAll').onclick = () => grid.querySelectorAll('video').forEach(v => v.play().catch(() => {}));
 document.getElementById('btnPauseAll').onclick = () => grid.querySelectorAll('video').forEach(v => v.pause());
 document.getElementById('btnPickList').onclick = () => { selectedCell = cells.findIndex(c => !c); if (selectedCell < 0) selectedCell = 0; openList(); };

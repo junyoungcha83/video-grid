@@ -342,7 +342,7 @@ document.getElementById('layoutSeg').onclick = (e) => {
 document.getElementById('btnFolder').onclick = async () => {
   if (window.showDirectoryPicker) {                 // 데스크톱 Chrome/Edge: 항상 새 폴더 선택
     setHint('폴더 선택…'); const items = await pickNewFolder();
-    if (items) { currentSource = 'fsa'; restoreFromSettingsThenLoad(items); } else setHint('');
+    if (items) { currentSource = 'fsa'; setActiveSlot(null); restoreFromSettingsThenLoad(items); } else setHint('');
   } else {                                            // 그 외: webkitdirectory 폴더 input(데스크톱) — 모바일은 "파일 선택" 권장
     document.getElementById('dirPick').click();
   }
@@ -350,7 +350,7 @@ document.getElementById('btnFolder').onclick = async () => {
 document.getElementById('btnFiles').onclick = async () => {
   if (window.showOpenFilePicker) {                  // 핸들 기반 → 슬롯 저장 시 재선택 없이 복원
     setHint('파일 선택…'); const items = await pickFiles();
-    if (items) { currentSource = 'fsa'; restoreFromSettingsThenLoad(items); } else setHint('');
+    if (items) { currentSource = 'fsa'; setActiveSlot(null); restoreFromSettingsThenLoad(items); } else setHint('');
   } else {                                            // 미지원(사파리/모바일 일부): input 폴백(복원 시 재선택 필요)
     document.getElementById('filePick').click();
   }
@@ -363,6 +363,38 @@ async function pwHash(str) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('vg-salt:' + str));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
+// 현재 화면 콘텐츠가 어느 슬롯에서 왔는지(없으면 임의 폴더/파일) — 재실행 시 잠금 판단용
+const ACTIVE_SLOT_KEY = 'vg:activeSlot';
+function getActiveSlot() { return localStorage.getItem(ACTIVE_SLOT_KEY) || null; }
+function setActiveSlot(s) { if (s) localStorage.setItem(ACTIVE_SLOT_KEY, s); else localStorage.removeItem(ACTIVE_SLOT_KEY); }
+
+// ── 비번 잠금화면(전체 가림) ──────────────────────────
+let lockTargetSlot = null, pendingUnlock = null;
+function lockApp(slot, onUnlock) {
+  lockTargetSlot = slot; pendingUnlock = onUnlock || null;
+  document.getElementById('lockName').textContent = slot;
+  document.getElementById('lockMsg').textContent = '';
+  const inp = document.getElementById('lockInput'); inp.value = '';
+  document.body.classList.add('locked');
+  document.getElementById('lockScreen').classList.remove('hidden');
+  setTimeout(() => inp.focus(), 50);
+}
+function unlockApp() {
+  document.body.classList.remove('locked');
+  document.getElementById('lockScreen').classList.add('hidden');
+  lockTargetSlot = null;
+}
+async function tryUnlock() {
+  const slot = lockTargetSlot; if (!slot) return;
+  const inp = document.getElementById('lockInput'), pw = slotPw(slot);
+  if (pw && (await pwHash(inp.value)) !== pw) {
+    document.getElementById('lockMsg').textContent = '비밀번호가 틀렸습니다.';
+    inp.select(); return;
+  }
+  const cb = pendingUnlock; pendingUnlock = null;
+  unlockApp();
+  if (cb) { try { await cb(); } catch {} }
+}
 function updateSlotUI() {
   document.querySelectorAll('.slot').forEach(btn => {
     const s = btn.dataset.slot, meta = slotMeta(s), locked = !!slotPw(s);
@@ -371,6 +403,8 @@ function updateSlotUI() {
     btn.textContent = (locked ? '🔒' : '') + s;
     btn.title = meta ? `슬롯 ${s} · ${meta.count || 0}개${locked ? ' · 비번잠금' : ''} (누르기=불러오기 · 길게=관리)`
                      : `슬롯 ${s} 비어있음 (누르기=현재 상태 저장 · 길게=관리)`;
+    const x = document.querySelector(`.slot-x[data-slotx="${s}"]`);
+    if (x) x.hidden = !meta && !locked;        // 저장본/비번 있을 때만 해제(✕) 노출
   });
 }
 async function saveSlot(s) {
@@ -378,20 +412,20 @@ async function saveSlot(s) {
   saveSession();                                                  // 현재 상태를 vg:session에 스냅샷
   localStorage.setItem('vg:slot:' + s, localStorage.getItem('vg:session') || '{}');
   if (currentSource === 'fsa') await copyHandle('dir', 'dir:' + s); else await deleteHandle('dir:' + s);
+  setActiveSlot(s);                                               // 현재 콘텐츠 = 이 슬롯
   updateSlotUI(); setHint(`슬롯 ${s}에 저장됨${slotPw(s) ? ' (비번잠금)' : ''}`);
 }
 async function loadSlot(s) {
   const meta = slotMeta(s);
   if (!meta) { setHint(`슬롯 ${s}는 비어있습니다`); return; }
-  const pw = slotPw(s);
-  if (pw) {
-    const inp = prompt(`슬롯 ${s} 비밀번호를 입력하세요`);
-    if (inp === null) return;
-    if (await pwHash(inp) !== pw) { alert('비밀번호가 틀렸습니다.'); return; }
-  }
-  localStorage.setItem('vg:session', JSON.stringify(meta));       // 이 슬롯을 현재 세션으로
-  await copyHandle('dir:' + s, 'dir');
-  await restoreSession();
+  const proceed = async () => {
+    localStorage.setItem('vg:session', JSON.stringify(meta));     // 이 슬롯을 현재 세션으로
+    await copyHandle('dir:' + s, 'dir');
+    setActiveSlot(s);
+    await restoreSession();
+  };
+  if (slotPw(s)) lockApp(s, proceed);                            // 비번 슬롯 → 잠금화면 통과 후 로드
+  else await proceed();
 }
 async function setSlotPassword(s) {
   const pw = prompt(`슬롯 ${s} 비밀번호 설정\n(빈칸으로 두면 잠금 해제 — 누구나 불러오기 가능)`, '');
@@ -404,7 +438,9 @@ function deleteSlot(s) {
   if (!slotMeta(s) && !slotPw(s)) { setHint(`슬롯 ${s}는 이미 비어있습니다`); return; }
   if (!confirm(`슬롯 ${s}의 저장 내용과 비밀번호를 삭제할까요?`)) return;
   localStorage.removeItem('vg:slot:' + s); localStorage.removeItem('vg:pw:' + s);
-  deleteHandle('dir:' + s); updateSlotUI(); setHint(`슬롯 ${s} 삭제됨`);
+  deleteHandle('dir:' + s);
+  if (getActiveSlot() === s) setActiveSlot(null);
+  updateSlotUI(); setHint(`슬롯 ${s} 해제됨`);
 }
 // 슬롯 버튼: 짧게=불러오기(빈칸은 저장) · 길게=관리 메뉴
 const slotMenu = document.getElementById('slotMenu');
@@ -419,6 +455,14 @@ document.querySelectorAll('.slot').forEach(btn => {
   btn.addEventListener('pointerleave', cancel);
   btn.addEventListener('contextmenu', e => { e.preventDefault(); openSlotMenu(s, btn); });
 });
+// 슬롯 ✕ = 해제(삭제). 슬롯 버튼 동작/롱프레스와 분리.
+document.querySelectorAll('.slot-x').forEach(x => {
+  x.addEventListener('pointerdown', e => { e.stopPropagation(); });
+  x.addEventListener('click', e => { e.stopPropagation(); e.preventDefault(); deleteSlot(x.dataset.slotx); });
+});
+// 잠금화면 해제
+document.getElementById('lockUnlock').onclick = tryUnlock;
+document.getElementById('lockInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); tryUnlock(); } });
 function openSlotMenu(s, btn) {
   menuSlot = s;
   document.getElementById('smName').textContent = s;
@@ -436,8 +480,8 @@ slotMenu.querySelectorAll('button').forEach(b => b.onclick = async () => {
   else if (act === 'del') deleteSlot(s);
 });
 document.addEventListener('pointerdown', e => { if (!slotMenu.contains(e.target) && !e.target.closest('.slot')) closeSlotMenu(); });
-document.getElementById('dirPick').onchange = (e) => { const items = toItems([...e.target.files]); if (items.length) { currentSource = 'input'; restoreFromSettingsThenLoad(items); } e.target.value = ''; };
-document.getElementById('filePick').onchange = (e) => { const items = toItems([...e.target.files]); if (items.length) { currentSource = 'input'; restoreFromSettingsThenLoad(items); } e.target.value = ''; };
+document.getElementById('dirPick').onchange = (e) => { const items = toItems([...e.target.files]); if (items.length) { currentSource = 'input'; setActiveSlot(null); restoreFromSettingsThenLoad(items); } e.target.value = ''; };
+document.getElementById('filePick').onchange = (e) => { const items = toItems([...e.target.files]); if (items.length) { currentSource = 'input'; setActiveSlot(null); restoreFromSettingsThenLoad(items); } e.target.value = ''; };
 document.getElementById('btnPlayAll').onclick = () => grid.querySelectorAll('video').forEach(v => v.play().catch(() => {}));
 document.getElementById('btnPauseAll').onclick = () => grid.querySelectorAll('video').forEach(v => v.pause());
 document.getElementById('btnPickList').onclick = () => { selectedCell = cells.findIndex(c => !c); if (selectedCell < 0) selectedCell = 0; openList(); };
@@ -511,6 +555,16 @@ async function restoreSession() {
   }
 }
 
+// 시작 시 자동복원 — 마지막 콘텐츠가 비번 슬롯이면 잠금화면 먼저(통과 후 복원), 아니면 바로 복원.
+async function bootRestore() {
+  const s = getActiveSlot();
+  if (s && slotPw(s) && slotMeta(s)) {
+    lockApp(s, async () => { await restoreSession(); });
+  } else {
+    await restoreSession();
+  }
+}
+
 // 초기 실행
 (async () => {
   if (!window.showDirectoryPicker) document.getElementById('btnFolder').title = '폴더 기억 미지원 — "파일 선택" 사용';
@@ -519,4 +573,5 @@ async function restoreSession() {
   updateSlotUI();
   const filled = SLOTS.filter(s => slotMeta(s));
   setHint(filled.length ? `슬롯 ${filled.join('/')} 저장됨 — 눌러서 불러오기` : '폴더/파일을 불러온 뒤 A·B·C에 저장하세요');
+  await bootRestore();
 })();

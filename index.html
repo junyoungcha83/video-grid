@@ -25,9 +25,9 @@
   <input id="dirPick" type="file" accept="video/*" multiple webkitdirectory hidden />
   <span class="lbl">설정</span>
   <div class="slots" id="slots">
-    <button class="slot" data-slot="A" title="누르기=불러오기 · 길게=저장/비번/삭제">A</button>
-    <button class="slot" data-slot="B" title="누르기=불러오기 · 길게=저장/비번/삭제">B</button>
-    <button class="slot" data-slot="C" title="누르기=불러오기 · 길게=저장/비번/삭제">C</button>
+    <span class="slot-wrap"><button class="slot" data-slot="A" title="누르기=불러오기 · 길게=저장/비번/삭제">A</button><button class="slot-x" data-slotx="A" title="이 슬롯 해제(삭제)" hidden>×</button></span>
+    <span class="slot-wrap"><button class="slot" data-slot="B" title="누르기=불러오기 · 길게=저장/비번/삭제">B</button><button class="slot-x" data-slotx="B" title="이 슬롯 해제(삭제)" hidden>×</button></span>
+    <span class="slot-wrap"><button class="slot" data-slot="C" title="누르기=불러오기 · 길게=저장/비번/삭제">C</button><button class="slot-x" data-slotx="C" title="이 슬롯 해제(삭제)" hidden>×</button></span>
   </div>
   <span class="sep"></span>
   <span class="lbl">배열</span>
@@ -70,6 +70,18 @@
         <button id="optSave" class="btn sm primary">저장</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- 비번 잠금화면(전체 가림) -->
+<div id="lockScreen" class="lock-screen hidden">
+  <div class="lock-box">
+    <div class="lock-emoji">🔒</div>
+    <div class="lock-title">슬롯 <span id="lockName">A</span> 잠김</div>
+    <div class="lock-sub">비밀번호를 입력하면 화면이 표시됩니다.</div>
+    <input id="lockInput" type="password" inputmode="text" autocomplete="off" placeholder="비밀번호" />
+    <div class="lock-msg" id="lockMsg"></div>
+    <button id="lockUnlock" class="btn primary">잠금 해제</button>
   </div>
 </div>
 

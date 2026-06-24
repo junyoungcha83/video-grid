@@ -3,6 +3,18 @@
 
 const VIDEO_EXT = /\.(mp4|m4v|webm|mov|ogg|ogv|mkv|avi)$/i;
 const LAYOUT_CELLS = { '1x2': 2, '2x2': 4, '3x2': 6, '3x3': 9 };
+// File System Access API 의 accept 는 와일드카드('video/*') 불가 → 구체 MIME 사용.
+const PICKER_TYPES = [{
+  description: '동영상',
+  accept: {
+    'video/mp4': ['.mp4', '.m4v'],
+    'video/webm': ['.webm'],
+    'video/quicktime': ['.mov'],
+    'video/x-matroska': ['.mkv'],
+    'video/x-msvideo': ['.avi'],
+    'video/ogg': ['.ogv', '.ogg'],
+  },
+}];
 
 let videos = [];          // 불러온 전체 목록: {key,name,size,mtime, getFile()}
 let cells = [];           // 칸 배정: VideoItem | null
@@ -105,10 +117,7 @@ async function requestPermFor(stored) {
 // '파일 선택'을 핸들 기반으로(가능 시) → 재선택 없이 슬롯 복원 가능
 async function pickFiles() {
   try {
-    const handles = await window.showOpenFilePicker({
-      multiple: true,
-      types: [{ description: 'Video', accept: { 'video/*': ['.mp4', '.m4v', '.webm', '.mov', '.mkv', '.avi', '.ogv'] } }],
-    });
+    const handles = await window.showOpenFilePicker({ multiple: true, types: PICKER_TYPES });
     if (!handles || !handles.length) return null;
     await saveHandle(handles);             // 파일핸들 배열을 '최근'으로 저장
     return await itemsFromStored(handles);
@@ -284,11 +293,12 @@ async function addFileToCell(idx) {
   if (window.showOpenFilePicker) {
     let handles;
     try {
-      handles = await window.showOpenFilePicker({
-        multiple: true,
-        types: [{ description: 'Video', accept: { 'video/*': ['.mp4', '.m4v', '.webm', '.mov', '.mkv', '.avi', '.ogv'] } }],
-      });
-    } catch { return; }                      // 사용자가 취소
+      handles = await window.showOpenFilePicker({ multiple: true, types: PICKER_TYPES });
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;     // 사용자가 취소
+      setHint('파일 열기 실패: ' + (err && err.message || err));   // 그 외 오류는 노출(조용히 죽지 않게)
+      return;
+    }
     if (!handles || !handles.length) return;
     const items = await itemsFromStored(handles);
     assignItemsToCell(idx, items);

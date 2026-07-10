@@ -58,6 +58,20 @@ async function saveHandle(h, key = 'dir') { const db = await idb(); db.transacti
 async function loadHandle(key = 'dir') { const db = await idb(); return new Promise(r => { const q = db.transaction('h', 'readonly').objectStore('h').get(key); q.onsuccess = () => r(q.result || null); q.onerror = () => r(null); }); }
 async function deleteHandle(key) { const db = await idb(); db.transaction('h', 'readwrite').objectStore('h').delete(key); }
 async function copyHandle(from, to) { const h = await loadHandle(from); if (h) await saveHandle(h, to); else await deleteHandle(to); }
+// 두 저장 핸들(폴더 or 파일배열)이 같은 대상을 가리키는지
+async function sameHandle(a, b) {
+  if (!a || !b) return false;
+  const arrA = Array.isArray(a), arrB = Array.isArray(b);
+  if (arrA !== arrB) return false;
+  try {
+    if (arrA) {
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) if (!(await a[i].isSameEntry(b[i]))) return false;
+      return true;
+    }
+    return await a.isSameEntry(b);
+  } catch { return false; }
+}
 
 // ── 파일 불러오기 ─────────────────────────────────────
 function toItems(files) {
@@ -578,8 +592,17 @@ async function restoreSession(gatePw = true) {
   let stored = null; try { stored = await loadHandle(); } catch {}
   if (stored) {
     const isDir = !Array.isArray(stored) && stored.kind === 'directory';
+    // 복원 대상이 비번 걸린 슬롯의 콘텐츠면 잠금. 1순위 activeSlot, 안되면 핸들 비교 폴백.
+    let lockSlot = null;
     const activeSlot = getActiveSlot();
-    const needPw = gatePw && !!(activeSlot && slotPw(activeSlot)); // 복원 대상이 비번 걸린 슬롯이면 잠금 (loadSlot 은 이미 통과했으므로 gatePw=false)
+    if (gatePw && activeSlot && slotPw(activeSlot)) lockSlot = activeSlot;
+    if (gatePw && !lockSlot) {
+      for (const s of SLOTS) {
+        if (!slotPw(s)) continue;
+        try { if (await sameHandle(await loadHandle('dir:' + s), stored)) { lockSlot = s; break; } } catch {}
+      }
+    }
+    const needPw = !!lockSlot;                                  // loadSlot 은 gatePw=false → 재잠금 안 함
 
     // 실제 복원 (권한 없으면 요청)
     const doRestore = async () => {
@@ -590,7 +613,7 @@ async function restoreSession(gatePw = true) {
     };
 
     if (needPw) {                                              // 비번 슬롯 → 자동복원 금지, '다시 열기' 누르면 잠금화면 먼저
-      showRestoreBanner(`${isDir ? '🔒 이전 폴더 다시 열기' : '🔒 이전 파일 다시 열기'}${sess.count ? ` · ${sess.count}개` : ''} · 비번`, () => lockApp(activeSlot, doRestore));
+      showRestoreBanner(`${isDir ? '🔒 이전 폴더 다시 열기' : '🔒 이전 파일 다시 열기'}${sess.count ? ` · ${sess.count}개` : ''} · 비번`, () => lockApp(lockSlot, doRestore));
       return;
     }
 

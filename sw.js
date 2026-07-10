@@ -1,5 +1,5 @@
 // 앱 셸 오프라인 캐시. 캐시 이름 바꾸면 옛 캐시 자동 폐기.
-const CACHE = 'video-grid-v12';
+const CACHE = 'video-grid-v13';
 const ASSETS = ['./', './index.html', './app.js', './styles.css', './manifest.webmanifest', './icon.svg', './icon-maskable.svg'];
 
 self.addEventListener('install', (e) => {
@@ -9,6 +9,10 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))));
   self.clients.claim();
+});
+// 앱이 현재 SW 캐시 버전을 물어보면 응답 (상단 표시용)
+self.addEventListener('message', (e) => {
+  if (e.data === 'version' && e.ports && e.ports[0]) e.ports[0].postMessage(CACHE);
 });
 // 같은 출처 GET 만 네트워크 우선, 실패 시 캐시 (blob/동영상은 패스)
 self.addEventListener('fetch', (e) => {

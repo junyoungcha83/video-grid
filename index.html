@@ -44,6 +44,7 @@
   <button id="btnPauseAll" class="btn">⏸︎ 전체정지</button>
   <button id="btnPickList" class="btn" title="불러온 목록에서 칸 채우기">🗂️ 목록</button>
   <span class="hint" id="hint"></span>
+  <span class="hint" id="swVer" title="서비스워커 버전 (배포 반영 확인용)"></span>
   <button id="btnHideBar" class="btn ghost" title="바 숨기기(H)">⌃</button>
 </header>
 
@@ -99,7 +100,27 @@
 <script src="app.js"></script>
 <script>
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+    // 새 SW 가 제어를 넘겨받으면 한 번 새로고침 → 항상 최신 코드로 갱신
+    let _reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (_reloaded) return; _reloaded = true; location.reload();
+    });
+    addEventListener('load', async () => {
+      try { await navigator.serviceWorker.register('sw.js'); } catch {}
+      // 현재 실행 중인 SW 의 캐시 버전을 상단에 표시 (배포 반영 확인용)
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const sw = reg.active; if (!sw) return;
+        const ver = await new Promise((res) => {
+          const mc = new MessageChannel();
+          mc.port1.onmessage = (e) => res(e.data);
+          sw.postMessage('version', [mc.port2]);
+          setTimeout(() => res(null), 1500);
+        });
+        const el = document.getElementById('swVer');
+        if (el && ver) el.textContent = ver.replace('video-grid-', 'SW ');
+      } catch {}
+    });
   }
 </script>
 </body>

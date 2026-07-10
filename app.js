@@ -465,7 +465,7 @@ async function loadSlot(s) {
     localStorage.setItem('vg:session', JSON.stringify(meta));     // 이 슬롯을 현재 세션으로
     await copyHandle('dir:' + s, 'dir');
     setActiveSlot(s);
-    await restoreSession();
+    await restoreSession(false);                                 // 이미 잠금 통과 → 재잠금 안 함
   };
   if (slotPw(s)) lockApp(s, proceed);                            // 비번 슬롯 → 잠금화면 통과 후 로드
   else await proceed();
@@ -572,24 +572,36 @@ function showRestoreBanner(text, onClick) {
 }
 
 // 저장된 세션 복원 (시작 시 + 📂 불러오기 버튼). FSA 권한 있으면 자동, 없으면 1클릭/파일 재선택.
-async function restoreSession() {
+async function restoreSession(gatePw = true) {
   const sess = loadSessionRaw();
   if (sess.layout && LAYOUT_CELLS[sess.layout]) { layout = sess.layout; setLayoutUI(); cells = Array.from({ length: LAYOUT_CELLS[layout] }, () => null); render(); }
   let stored = null; try { stored = await loadHandle(); } catch {}
   if (stored) {
     const isDir = !Array.isArray(stored) && stored.kind === 'directory';
+    const activeSlot = getActiveSlot();
+    const needPw = gatePw && !!(activeSlot && slotPw(activeSlot)); // 복원 대상이 비번 걸린 슬롯이면 잠금 (loadSlot 은 이미 통과했으므로 gatePw=false)
+
+    // 실제 복원 (권한 없으면 요청)
+    const doRestore = async () => {
+      let perm = 'prompt'; try { perm = await permState(stored); } catch {}
+      if (perm !== 'granted' && !(await requestPermFor(stored))) { setHint('접근 권한 거부됨'); return; }
+      const items = await itemsFromStored(stored);
+      if (items && items.length) { currentSource = 'fsa'; setHint(isDir ? '이전 폴더 복원됨' : '이전 파일 복원됨'); restoreFromSettingsThenLoad(items); }
+    };
+
+    if (needPw) {                                              // 비번 슬롯 → 자동복원 금지, '다시 열기' 누르면 잠금화면 먼저
+      showRestoreBanner(`${isDir ? '🔒 이전 폴더 다시 열기' : '🔒 이전 파일 다시 열기'}${sess.count ? ` · ${sess.count}개` : ''} · 비번`, () => lockApp(activeSlot, doRestore));
+      return;
+    }
+
     let perm = 'prompt'; try { perm = await permState(stored); } catch {}
-    if (perm === 'granted') {                                   // 권한 유지 → 재선택 없이 자동 복원
+    if (perm === 'granted') {                                   // 비번 없음 + 권한 유지 → 재선택 없이 자동 복원
       try {
         const items = await itemsFromStored(stored);
         if (items && items.length) { currentSource = 'fsa'; setHint(isDir ? '이전 폴더 복원됨' : '이전 파일 복원됨'); restoreFromSettingsThenLoad(items); return; }
       } catch {}
     }
-    showRestoreBanner(`${isDir ? '📂 이전 폴더 다시 열기' : '📄 이전 파일 다시 열기'}${sess.count ? ` · ${sess.count}개` : ''}`, async () => {
-      if (!(await requestPermFor(stored))) { setHint('접근 권한 거부됨'); return; }
-      const items = await itemsFromStored(stored);
-      if (items && items.length) { currentSource = 'fsa'; restoreFromSettingsThenLoad(items); }
-    });
+    showRestoreBanner(`${isDir ? '📂 이전 폴더 다시 열기' : '📄 이전 파일 다시 열기'}${sess.count ? ` · ${sess.count}개` : ''}`, doRestore);
     return;
   }
   if (Array.isArray(sess.cellKeys) && sess.cellKeys.some(Boolean)) {     // input 폴백 세션 → 재선택 필요
@@ -599,8 +611,8 @@ async function restoreSession() {
   }
 }
 
-// 시작 시 자동복원 — 재실행 땐 잠금 없이 바로 복원.
-// (비밀번호는 비번 걸린 슬롯 A·B·C를 직접 열 때만 loadSlot 에서 물어봄.)
+// 시작 시 자동복원 — 단, 마지막 콘텐츠가 비번 걸린 슬롯이면 잠금화면 통과 후 복원.
+// (비번 없는 콘텐츠는 기존처럼 권한 있으면 자동, 없으면 '다시 열기' 배너.)
 async function bootRestore() {
   await restoreSession();
 }

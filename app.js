@@ -215,7 +215,7 @@ function makeTile(item, idx) {
       <span class="grow"></span>
       <button class="ic ab-t" title="구간반복 켜기/끄기">🔁</button>
       <button class="ic ab-clr" title="구간 해제">⤫</button>
-      <button class="ic mute" title="소리(클릭=이 영상만)">🔇</button>
+      <button class="ic mute" title="소리 켜기/끄기(토글)">🔇</button>
       <button class="ic gear" title="설정">⚙︎</button>
       <button class="ic close" title="이 칸 비우기">×</button>
     </div>`;
@@ -266,16 +266,16 @@ function makeTile(item, idx) {
   bar.addEventListener('click', (e) => e.stopPropagation());   // 바 조작은 타일 solo로 안 번지게
   bar.querySelector('.ab-t').onclick = () => { const o = getOpt(item.key); o.loopOn = !o.loopOn; setOpt(item.key, o); layoutSeek(); if (o.loopOn) { try { v.currentTime = ab().A; } catch {} } };
   bar.querySelector('.ab-clr').onclick = () => { const o = getOpt(item.key); delete o.loopA; delete o.loopB; o.loopOn = false; setOpt(item.key, o); layoutSeek(); };
-  bar.querySelector('.mute').onclick = () => soloAudio(idx);
+  bar.querySelector('.mute').onclick = () => toggleAudio(idx);
   bar.querySelector('.gear').onclick = () => openOpt(idx);
   bar.querySelector('.close').onclick = () => { cells[idx] = null; saveSession(); render(); };
 
   // 재생 위치 갱신 + 구간반복 + 이어보기 저장
   let lastSave = 0;
   v.addEventListener('timeupdate', () => {
-    const o = getOpt(item.key);
-    if (o.loopOn && typeof o.loopA === 'number' && typeof o.loopB === 'number' && o.loopB > o.loopA + 0.05) {
-      if (v.currentTime >= o.loopB - 0.03 || v.currentTime < o.loopA - 0.25) { try { v.currentTime = o.loopA; } catch {} }
+    const { o, d, A, B } = ab();                 // A=loopA??0, B=loopB??길이 → 한쪽만 설정해도 동작
+    if (o.loopOn && d && B > A + 0.05) {
+      if (v.currentTime >= B - 0.03 || v.currentTime < A - 0.25) { try { v.currentTime = A; } catch {} }
     }
     playhead();
     if (o.resume && Date.now() - lastSave > 3000) { lastSave = Date.now(); o.pos = v.currentTime; setOpt(item.key, o); }
@@ -284,19 +284,22 @@ function makeTile(item, idx) {
   tile.appendChild(v);
   tile.appendChild(bar);
   layoutSeek();
-  tile.addEventListener('click', () => soloAudio(idx));        // 영상 클릭 = 그 영상만 소리
+  tile.addEventListener('click', () => toggleAudio(idx));      // 영상 클릭 = 소리 토글(켜기/끄기)
   tile.addEventListener('dblclick', () => v.requestFullscreen?.());
   return tile;
 }
 
-// 한 영상만 소리(나머지 음소거)
-function soloAudio(idx) {
-  grid.querySelectorAll('.tile').forEach((t, i) => {
+// 소리 토글 — 이미 켜진 칸을 다시 누르면 끔(전체 음소거). 아니면 그 칸만 켜고 나머지 음소거(solo).
+function toggleAudio(idx) {
+  const tiles = grid.querySelectorAll('.tile');
+  const cur = tiles[idx] && tiles[idx].querySelector('video');
+  const turnOff = cur && !cur.muted;      // 이미 소리 켜져 있으면 이번 클릭은 '끄기'
+  tiles.forEach((t, i) => {
     const v = t.querySelector('video'); if (!v) return;
-    const on = (i === idx);
+    const on = !turnOff && i === idx;
     v.muted = !on;
     t.classList.toggle('audio-on', on);
-    t.querySelector('.mute') && (t.querySelector('.mute').textContent = on ? '🔊' : '🔇');
+    const mb = t.querySelector('.mute'); if (mb) mb.textContent = on ? '🔊' : '🔇';
   });
 }
 
@@ -437,6 +440,28 @@ async function pwHash(str) {
 const ACTIVE_SLOT_KEY = 'vg:activeSlot';
 function getActiveSlot() { return localStorage.getItem(ACTIVE_SLOT_KEY) || null; }
 function setActiveSlot(s) { if (s) localStorage.setItem(ACTIVE_SLOT_KEY, s); else localStorage.removeItem(ACTIVE_SLOT_KEY); }
+// 복원 콘텐츠가 비번 걸린 슬롯의 것이면 그 슬롯을 반환(없으면 null). 여러 신호로 견고하게 판별.
+async function lockSlotForRestore(stored, sess) {
+  const normArr = (arr) => JSON.stringify((arr || []).map(k => (k ? normKey(k) : null)));
+  const sessKeys = normArr(sess && sess.cellKeys);
+  // 1) activeSlot
+  const a = getActiveSlot();
+  if (a && slotPw(a)) return a;
+  // 2) 세션 내용(cellKeys)이 비번 슬롯 저장본과 일치
+  if (sessKeys !== '[]') {
+    for (const s of SLOTS) {
+      if (!slotPw(s)) continue;
+      const meta = slotMeta(s);
+      if (meta && normArr(meta.cellKeys) === sessKeys) return s;
+    }
+  }
+  // 3) 저장 핸들이 비번 슬롯 핸들과 동일
+  for (const s of SLOTS) {
+    if (!slotPw(s)) continue;
+    try { if (await sameHandle(await loadHandle('dir:' + s), stored)) return s; } catch {}
+  }
+  return null;
+}
 
 // ── 비번 잠금화면(전체 가림) ──────────────────────────
 let lockTargetSlot = null, pendingUnlock = null, lockPushed = false;
@@ -625,16 +650,8 @@ async function restoreSession(gatePw = true) {
   let stored = null; try { stored = await loadHandle(); } catch {}
   if (stored) {
     const isDir = !Array.isArray(stored) && stored.kind === 'directory';
-    // 복원 대상이 비번 걸린 슬롯의 콘텐츠면 잠금. 1순위 activeSlot, 안되면 핸들 비교 폴백.
-    let lockSlot = null;
-    const activeSlot = getActiveSlot();
-    if (gatePw && activeSlot && slotPw(activeSlot)) lockSlot = activeSlot;
-    if (gatePw && !lockSlot) {
-      for (const s of SLOTS) {
-        if (!slotPw(s)) continue;
-        try { if (await sameHandle(await loadHandle('dir:' + s), stored)) { lockSlot = s; break; } } catch {}
-      }
-    }
+    // 복원 대상이 비번 걸린 슬롯의 콘텐츠면 잠금 (activeSlot·세션내용·핸들 3중 판별)
+    const lockSlot = gatePw ? await lockSlotForRestore(stored, sess) : null;
     const needPw = !!lockSlot;                                  // loadSlot 은 gatePw=false → 재잠금 안 함
 
     // 실제 복원 (권한 없으면 요청)

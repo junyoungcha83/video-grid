@@ -426,7 +426,7 @@ function getActiveSlot() { return localStorage.getItem(ACTIVE_SLOT_KEY) || null;
 function setActiveSlot(s) { if (s) localStorage.setItem(ACTIVE_SLOT_KEY, s); else localStorage.removeItem(ACTIVE_SLOT_KEY); }
 
 // ── 비번 잠금화면(전체 가림) ──────────────────────────
-let lockTargetSlot = null, pendingUnlock = null;
+let lockTargetSlot = null, pendingUnlock = null, lockPushed = false;
 function lockApp(slot, onUnlock) {
   lockTargetSlot = slot; pendingUnlock = onUnlock || null;
   document.getElementById('lockName').textContent = slot;
@@ -434,13 +434,32 @@ function lockApp(slot, onUnlock) {
   const inp = document.getElementById('lockInput'); inp.value = '';
   document.body.classList.add('locked');
   document.getElementById('lockScreen').classList.remove('hidden');
+  // 뒤로가기가 앱을 종료시키지 않도록 히스토리 항목 하나 추가 → 뒤로가기 시 잠금만 닫힘
+  if (!lockPushed) { try { history.pushState({ vgLock: 1 }, ''); lockPushed = true; } catch {} }
   setTimeout(() => inp.focus(), 50);
+}
+// 잠금화면만 닫고 앱 화면으로 (복원 콜백 실행 안 함)
+function closeLock() {
+  pendingUnlock = null; lockTargetSlot = null;
+  document.body.classList.remove('locked');
+  document.getElementById('lockScreen').classList.add('hidden');
+}
+// 취소/뒤로 버튼 — 쌓아둔 히스토리 정리 후 닫기
+function cancelLock() {
+  const wasPushed = lockPushed; lockPushed = false;
+  closeLock();
+  if (wasPushed) { try { history.back(); } catch {} }
 }
 function unlockApp() {
   document.body.classList.remove('locked');
   document.getElementById('lockScreen').classList.add('hidden');
   lockTargetSlot = null;
+  if (lockPushed) { lockPushed = false; try { history.back(); } catch {} } // 쌓아둔 히스토리 정리
 }
+// 하드웨어/브라우저 뒤로가기: 잠금 중이면 앱 종료 대신 잠금만 닫기
+window.addEventListener('popstate', () => {
+  if (document.body.classList.contains('locked')) { lockPushed = false; closeLock(); }
+});
 async function tryUnlock() {
   const slot = lockTargetSlot; if (!slot) return;
   const inp = document.getElementById('lockInput'), pw = slotPw(slot);
@@ -519,6 +538,7 @@ document.querySelectorAll('.slot-x').forEach(x => {
 });
 // 잠금화면 해제
 document.getElementById('lockUnlock').onclick = tryUnlock;
+document.getElementById('lockCancel')?.addEventListener('click', cancelLock);
 document.getElementById('lockInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); tryUnlock(); } });
 function openSlotMenu(s, btn) {
   menuSlot = s;

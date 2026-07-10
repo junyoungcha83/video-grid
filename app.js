@@ -23,10 +23,23 @@ let selectedCell = 0;     // 설정/목록배정 대상 칸
 let currentSource = '';   // 'fsa' | 'input' — 마지막 불러오기 방식
 
 // ── 동영상별 옵션 (localStorage) ──────────────────────
-const fileKey = (f) => `${f.name}::${f.size}::${f.lastModified}`;
-const optKey = (k) => `vg:opt:${k}`;
+// 파일 식별 key — 이동/원복해도 유지되도록 mtime 제외(name+size). 같은 폴더로 원복 시 재매칭됨.
+const fileKey = (f) => `${f.name}::${f.size}`;
+// 옛 key(name::size::mtime) 도 name::size 로 정규화해 하위호환 매칭
+const normKey = (k) => String(k || '').split('::').slice(0, 2).join('::');
+const optKey = (k) => `vg:opt:${normKey(k)}`;
 function getOpt(key) {
-  try { return JSON.parse(localStorage.getItem(optKey(key)) || '{}'); } catch { return {}; }
+  try {
+    let raw = localStorage.getItem(optKey(key));
+    if (!raw) {                                          // 구버전 옵션(vg:opt:name::size::mtime) 흡수
+      const prefix = optKey(key) + '::';
+      for (let i = 0; i < localStorage.length; i++) {
+        const lk = localStorage.key(i);
+        if (lk && lk.startsWith(prefix)) { raw = localStorage.getItem(lk); localStorage.setItem(optKey(key), raw); localStorage.removeItem(lk); break; }
+      }
+    }
+    return JSON.parse(raw || '{}');
+  } catch { return {}; }
 }
 function setOpt(key, o) { localStorage.setItem(optKey(key), JSON.stringify(o)); }
 
@@ -378,8 +391,8 @@ function restoreSessionInto() {
     const s = JSON.parse(localStorage.getItem('vg:session') || '{}');
     if (s.layout && LAYOUT_CELLS[s.layout]) { layout = s.layout; setLayoutUI(); }
     if (Array.isArray(s.cellKeys) && videos.length) {
-      const byKey = Object.fromEntries(videos.map(v => [v.key, v]));
-      cells = s.cellKeys.slice(0, LAYOUT_CELLS[layout]).map(k => byKey[k] || null);
+      const byKey = Object.fromEntries(videos.map(v => [normKey(v.key), v]));
+      cells = s.cellKeys.slice(0, LAYOUT_CELLS[layout]).map(k => byKey[normKey(k)] || null);
       while (cells.length < LAYOUT_CELLS[layout]) cells.push(null);
     }
   } catch {}

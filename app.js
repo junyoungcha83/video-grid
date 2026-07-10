@@ -165,8 +165,13 @@ async function loadVideos(items) {
 // ── 격자 렌더 ─────────────────────────────────────────
 const grid = document.getElementById('grid');
 function render() {
-  // 기존 URL 정리
-  grid.querySelectorAll('video').forEach(v => { if (v.src) URL.revokeObjectURL(v.src); });
+  // 기존 video 완전 정지(떨어져 나간 뒤에도 오디오가 계속 나던 누수 방지) + URL 정리
+  grid.querySelectorAll('video').forEach(v => {
+    try { v.pause(); } catch {}
+    if (v.src) URL.revokeObjectURL(v.src);
+    v.removeAttribute('src');
+    try { v.load(); } catch {}
+  });
   grid.className = `grid layout-${layout}`;
   grid.innerHTML = '';
   cells.forEach((item, i) => grid.appendChild(makeTile(item, i)));

@@ -298,6 +298,7 @@ function toggleAudio(idx) {
     const v = t.querySelector('video'); if (!v) return;
     const on = !turnOff && i === idx;
     v.muted = !on;
+    if (on) { if (!(v.volume > 0)) v.volume = 1; v.play().catch(() => {}); }  // 켤 때 볼륨 보장 + 재생 (안 들리는 문제 방지)
     t.classList.toggle('audio-on', on);
     const mb = t.querySelector('.mute'); if (mb) mb.textContent = on ? '🔊' : '🔇';
   });

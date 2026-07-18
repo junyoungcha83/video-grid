@@ -48,6 +48,8 @@ body.bar-hidden .topbar { display: none; }
 
 .tile { position: relative; background: #05070a; overflow: hidden; min-height: 0; }
 .tile video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+.tile img.media { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+.tile video, .tile img.media { will-change: transform; }
 .tile.audio-on { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tile.empty { display: flex; align-items: center; justify-content: center; border: 1px dashed #2b3644; }
 .tile .add { width: 56px; height: 56px; border-radius: 50%; font-size: 28px; line-height: 1;

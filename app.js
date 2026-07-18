@@ -2,6 +2,8 @@
 // 전부 로컬 브라우저 전용. 파일은 서버/클라우드로 안 나감.
 
 const VIDEO_EXT = /\.(mp4|m4v|webm|mov|ogg|ogv|mkv|avi)$/i;
+const IMG_EXT = /\.(jpe?g|png|gif|webp|bmp|heic|heif|avif)$/i;
+const isImgName = (n) => IMG_EXT.test(n || '');
 const LAYOUT_CELLS = { '1x2': 2, '2x2': 4, '3x2': 6, '3x3': 9 };
 // File System Access API 의 accept 는 와일드카드('video/*') 불가 → 구체 MIME 사용.
 const PICKER_TYPES = [{
@@ -13,6 +15,17 @@ const PICKER_TYPES = [{
     'video/x-matroska': ['.mkv'],
     'video/x-msvideo': ['.avi'],
     'video/ogg': ['.ogv', '.ogg'],
+  },
+}, {
+  description: '사진',
+  accept: {
+    'image/jpeg': ['.jpg', '.jpeg'],
+    'image/png': ['.png'],
+    'image/gif': ['.gif'],
+    'image/webp': ['.webp'],
+    'image/bmp': ['.bmp'],
+    'image/heic': ['.heic', '.heif'],
+    'image/avif': ['.avif'],
   },
 }];
 
@@ -88,7 +101,7 @@ async function sameHandle(a, b) {
 
 // ── 파일 불러오기 ─────────────────────────────────────
 function toItems(files) {
-  return files.filter(f => f && (/(^video\/)/.test(f.type) || VIDEO_EXT.test(f.name)))
+  return files.filter(f => f && (/^video\//.test(f.type) || VIDEO_EXT.test(f.name) || /^image\//.test(f.type) || IMG_EXT.test(f.name)))
     .map(f => ({ key: fileKey(f), name: f.name, size: f.size, mtime: f.lastModified, _file: f, getFile: async () => f }))
     .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
 }
@@ -172,9 +185,59 @@ function render() {
     v.removeAttribute('src');
     try { v.load(); } catch {}
   });
+  grid.querySelectorAll('img.media').forEach(im => { if (im.src) URL.revokeObjectURL(im.src); });
   grid.className = `grid layout-${layout}`;
   grid.innerHTML = '';
   cells.forEach((item, i) => grid.appendChild(makeTile(item, i)));
+}
+
+// 프레임별 손가락 확대/이동(핀치+팬). media(video/img)에 CSS transform 적용, opt에 저장.
+function attachZoom(tile, media, item) {
+  let z = (getOpt(item.key).zoom) || { s: 1, x: 0, y: 0 };
+  const apply = () => { media.style.transformOrigin = 'center center'; media.style.transform = `translate(${z.x}px,${z.y}px) scale(${z.s})`; };
+  const clamp = () => {
+    z.s = Math.max(1, Math.min(6, z.s));
+    const r = tile.getBoundingClientRect();
+    const mx = (z.s - 1) * r.width / 2, my = (z.s - 1) * r.height / 2;
+    z.x = Math.max(-mx, Math.min(mx, z.x)); z.y = Math.max(-my, Math.min(my, z.y));
+    if (z.s <= 1.01) { z.s = 1; z.x = 0; z.y = 0; }
+  };
+  const save = () => { const o = getOpt(item.key); if (z.s > 1.01) o.zoom = { s: z.s, x: z.x, y: z.y }; else delete o.zoom; setOpt(item.key, o); };
+  media.style.touchAction = 'none';
+  apply();
+  const pts = new Map(); let st = null, moved = false;
+  media.addEventListener('pointerdown', e => {
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { media.setPointerCapture(e.pointerId); } catch {}
+    moved = false;
+    if (pts.size === 2) { const [a, b] = [...pts.values()]; st = { pinch: 1, dist: Math.hypot(a.x - b.x, a.y - b.y), s: z.s, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, x: z.x, y: z.y }; e.preventDefault(); }
+    else if (pts.size === 1 && z.s > 1) { const p = [...pts.values()][0]; st = { pan: 1, px: p.x, py: p.y, x: z.x, y: z.y }; e.preventDefault(); }
+    else st = null;
+  });
+  media.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId) || !st) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (st.pinch && pts.size >= 2) {
+      const [a, b] = [...pts.values()];
+      z.s = st.s * (Math.hypot(a.x - b.x, a.y - b.y) / st.dist);
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      z.x = st.x + (mx - st.mx); z.y = st.y + (my - st.my);
+      clamp(); apply(); moved = true; e.preventDefault();
+    } else if (st.pan) {
+      const p = [...pts.values()][0];
+      z.x = st.x + (p.x - st.px); z.y = st.y + (p.y - st.py);
+      clamp(); apply(); moved = true; e.preventDefault();
+    }
+  });
+  const end = e => {
+    pts.delete(e.pointerId);
+    if (pts.size < 2) st = null;
+    if (pts.size === 1 && z.s > 1) { const p = [...pts.values()][0]; st = { pan: 1, px: p.x, py: p.y, x: z.x, y: z.y }; }
+    if (pts.size === 0) { clamp(); apply(); save(); if (moved) { tile._noClick = 1; setTimeout(() => tile._noClick = 0, 80); } }
+  };
+  media.addEventListener('pointerup', end);
+  media.addEventListener('pointercancel', end);
+  media.addEventListener('wheel', e => { e.preventDefault(); z.s *= (e.deltaY < 0 ? 1.12 : 0.89); clamp(); apply(); save(); }, { passive: false });
 }
 
 function makeTile(item, idx) {
@@ -182,11 +245,26 @@ function makeTile(item, idx) {
   tile.className = 'tile' + (item ? '' : ' empty');
   tile.dataset.idx = idx;
   if (!item) {
-    tile.innerHTML = `<button class="add" title="이 칸에 동영상 파일 추가">＋</button>`;
+    tile.innerHTML = `<button class="add" title="이 칸에 동영상·사진 추가">＋</button>`;
     tile.querySelector('.add').onclick = () => { addFileToCell(idx); };
     return tile;
   }
-  const v = document.createElement('video');
+  // ── 사진 타일 ──
+  if (isImgName(item.name)) {
+    const img = document.createElement('img'); img.className = 'media'; img.alt = item.name;
+    item.getFile().then(f => { img.src = URL.createObjectURL(f); });
+    const bar = document.createElement('div'); bar.className = 'tilebar';
+    bar.innerHTML = `<div class="btnrow"><span class="nm" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span><span class="grow"></span>
+      <button class="ic zreset" title="확대 초기화">⤢</button><button class="ic close" title="이 칸 비우기">×</button></div>`;
+    bar.addEventListener('click', e => e.stopPropagation());
+    bar.querySelector('.close').onclick = () => { cells[idx] = null; saveSession(); render(); };
+    bar.querySelector('.zreset').onclick = () => { const o = getOpt(item.key); delete o.zoom; setOpt(item.key, o); render(); };
+    tile.appendChild(img); tile.appendChild(bar);
+    attachZoom(tile, img, item);
+    tile.addEventListener('dblclick', () => tile.requestFullscreen?.());
+    return tile;
+  }
+  const v = document.createElement('video'); v.className = 'media';
   v.muted = true; v.loop = true; v.playsInline = true; v.preload = 'metadata';
   const opt = getOpt(item.key);
   if (typeof opt.vol === 'number') v.volume = opt.vol;
@@ -289,7 +367,8 @@ function makeTile(item, idx) {
   tile.appendChild(v);
   tile.appendChild(bar);
   layoutSeek();
-  tile.addEventListener('click', () => toggleAudio(idx));      // 영상 클릭 = 소리 토글(켜기/끄기)
+  attachZoom(tile, v, item);                                    // 두 손가락으로 이 칸만 확대·이동
+  tile.addEventListener('click', () => { if (!tile._noClick) toggleAudio(idx); });  // 클릭=소리 토글(확대·이동 중엔 무시)
   tile.addEventListener('dblclick', () => v.requestFullscreen?.());
   return tile;
 }

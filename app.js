@@ -4,7 +4,7 @@
 const VIDEO_EXT = /\.(mp4|m4v|webm|mov|ogg|ogv|mkv|avi)$/i;
 const IMG_EXT = /\.(jpe?g|png|gif|webp|bmp|heic|heif|avif)$/i;
 const isImgName = (n) => IMG_EXT.test(n || '');
-const LAYOUT_CELLS = { '1x2': 2, '2x2': 4, '3x2': 6, '3x3': 9 };
+const LAYOUT_CELLS = { '1x1': 1, '1x2': 2, '2x2': 4, '3x2': 6, '3x3': 9 };
 // File System Access API 의 accept 는 와일드카드('video/*') 불가 → 구체 MIME 사용.
 const PICKER_TYPES = [{
   description: '동영상',
